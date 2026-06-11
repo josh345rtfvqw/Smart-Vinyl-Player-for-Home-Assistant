@@ -1,0 +1,91 @@
+esphome:
+  name: d1-vinyl
+  friendly_name: D1 Vinyl
+esp32:
+  board: lolin_s3
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  min_auth_mode: WPA2
+api:
+  encryption:
+    key: !secret api_encryption_key
+  services:
+    - service: stepper_stop
+      then:
+        - stepper.set_target:
+            id: vinyl_stepper
+            target: !lambda 'return id(vinyl_stepper).current_position;'
+    - service: stepper_start
+      then:
+        - stepper.set_target:
+            id: vinyl_stepper
+            target: !lambda 'return id(vinyl_stepper).current_position + 17280000;'
+stepper:
+  - platform: uln2003
+    id: vinyl_stepper
+    pin_a: GPIO5
+    pin_b: GPIO4
+    pin_c: GPIO12
+    pin_d: GPIO14
+    max_speed: 500 steps/s
+    sleep_when_done: true
+uart:
+  rx_pin: GPIO13
+  tx_pin: GPIO15
+  baud_rate: 9600
+globals:
+  - id: last_tag
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: current_tag_temp
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: last_seen
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+rdm6300:
+  on_tag:
+    then:
+      - lambda: |-
+          char buf[11];
+          sprintf(buf, "%u", x);
+          id(current_tag_temp) = std::string(buf);
+          id(last_seen) = millis();  // update last seen timestamp
+      - if:
+          condition:
+            lambda: 'return id(current_tag_temp) != id(last_tag);'
+          then:
+            - lambda: 'id(last_tag) = id(current_tag_temp);'
+            - homeassistant.tag_scanned: !lambda 'return id(last_tag);'
+            - stepper.set_target:
+                id: vinyl_stepper
+                target: !lambda 'return id(vinyl_stepper).current_position + 17280000;'
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(last_tag).empty() && (millis() - id(last_seen) > 1000);'
+          then:
+            - lambda: 'id(last_tag).clear();'
+            - stepper.set_target:
+                id: vinyl_stepper
+                target: !lambda 'return id(vinyl_stepper).current_position;'
+switch:
+  - platform: template
+    name: "Vinyl Motor"
+    id: vinyl_motor_switch
+    optimistic: true
+    turn_on_action:
+      - stepper.set_target:
+          id: vinyl_stepper
+          target: !lambda 'return id(vinyl_stepper).current_position + 17280000;'
+    turn_off_action:
+      - stepper.set_target:
+          id: vinyl_stepper
+          target: !lambda 'return id(vinyl_stepper).current_position;'
